@@ -67,13 +67,17 @@ class DQN(nn.Module):
         
         linear_size = 16
         
-        self.start = nn.Linear(self.n_inputs * 1, linear_size)
+        
+        self.start = nn.Linear(self.n_inputs, linear_size)
         self.head = nn.Linear(linear_size, outputs)
 
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
     def forward(self, x):
         x = x.to(device)
+        
+        print(f"{x.shape=}")
+        
         x = F.relu(self.start(x))
         x = F.relu(self.head(x))
         
@@ -88,11 +92,6 @@ def get_cart_location(screen_width):
 
 
 env.reset()
-#plt.figure()
-#plt.imshow(get_screen().cpu().squeeze(0).permute(1, 2, 0).numpy(),
-#           interpolation='none')
-#plt.title('Example extracted screen')
-#plt.show()
 
 
 # Get number of actions from gym action space
@@ -185,7 +184,7 @@ def select_action(state):
             # second column on max result is index of where max element was
             # found, so we pick action with the larger expected reward.
             action = policy_net(state)
-            print(f"{action.shape=}")
+            #print(f"{action.shape=}")
             return action.max(0)[1].view(1, 1)
     else:
         return torch.tensor([[random.randrange(n_actions)]], device=device, dtype=torch.long)
@@ -212,10 +211,13 @@ def optimize_model():
     if len(memory) < BATCH_SIZE:
         return
     transitions = memory.sample(BATCH_SIZE)
+    print("trans shape ", len(transitions), len(transitions[0]))
     # Transpose the batch (see https://stackoverflow.com/a/19343/3343043 for
     # detailed explanation). This converts batch-array of Transitions
     # to Transition of batch-arrays.
     batch = Transition(*zip(*transitions))
+    
+    print("batch shape ", len(batch), len(batch[0]), batch)
 
     # Compute a mask of non-final states and concatenate the batch elements
     # (a final state would've been the one after which simulation ended)
@@ -223,14 +225,19 @@ def optimize_model():
                                           batch.next_state)), device=device, dtype=torch.bool)
     non_final_next_states = torch.cat([s for s in batch.next_state
                                                 if s is not None])
-    state_batch = torch.cat(batch.state)
+    #state_batch = torch.cat(batch.state, 0)
+    state_batch = torch.tensor(list(batch.state))
     action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
-
+    
+    #print("batch.state ", batch.state)
+    #print("state batch ", state_batch)
+    print(torch.transpose(state_batch, 0, 1))
+    
     # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
     # columns of actions taken. These are the actions which would've been taken
     # for each batch state according to policy_net
-    state_action_values = policy_net(state_batch).gather(1, action_batch)
+    state_action_values = policy_net(torch.transpose(state_batch, 0, 1)).gather(1, action_batch)
 
     # Compute V(s_{t+1}) for all next states.
     # Expected values of actions for non_final_next_states are computed based
@@ -269,7 +276,7 @@ try:
                 next_state = None
 
             # Store the transition in memory
-            memory.push(state, action, next_state, reward)
+            memory.push(state.unsqueeze(1), action, next_state, reward)
 
             # Move to the next state
             state = next_state
