@@ -20,15 +20,17 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 
-Load = True
-dir = "save_1"
+
+
+
+Load = False
+dir = "save"
 
 env = gym.make('CartPole-v0').unwrapped
 
-# set up matplotlib
-is_ipython = 'inline' in matplotlib.get_backend()
-if is_ipython:
-    from IPython import display
+
+print(env.observation_space)
+
 
 plt.ion()
 
@@ -58,37 +60,24 @@ class ReplayMemory(object):
 
 class DQN(nn.Module):
 
-    def __init__(self, h, w, outputs):
+    def __init__(self, outputs):
         super(DQN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=5, stride=2)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=5, stride=2)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
-        self.bn3 = nn.BatchNorm2d(32)
-
-        # Number of Linear input connections depends on output of conv2d layers
-        # and therefore the input image size, so compute it.
-        def conv2d_size_out(size, kernel_size = 5, stride = 2):
-            return (size - (kernel_size - 1) - 1) // stride  + 1
-        convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w)))
-        convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h)))
-        linear_input_size = convw * convh * 32
-        self.head = nn.Linear(linear_input_size, outputs)
+        
+        self.n_inputs = env.observation_space.shape[0]
+        
+        linear_size = 16
+        
+        self.start = nn.Linear(self.n_inputs * 1, linear_size)
+        self.head = nn.Linear(linear_size, outputs)
 
     # Called with either one element to determine next action, or a batch
     # during optimization. Returns tensor([[left0exp,right0exp]...]).
     def forward(self, x):
         x = x.to(device)
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        return self.head(x.view(x.size(0), -1))
-
-
-resize = T.Compose([T.ToPILImage(),
-                    T.Resize(40, interpolation=Image.CUBIC),
-                    T.ToTensor()])
+        x = F.relu(self.start(x))
+        x = F.relu(self.head(x))
+        
+        return x
 
 
 def get_cart_location(screen_width):
@@ -96,30 +85,6 @@ def get_cart_location(screen_width):
     scale = screen_width / world_width
     return int(env.state[0] * scale + screen_width / 2.0)  # MIDDLE OF CART
 
-def get_screen():
-    # Returned screen requested by gym is 400x600x3, but is sometimes larger
-    # such as 800x1200x3. Transpose it into torch order (CHW).
-    screen = env.render(mode='rgb_array').transpose((2, 0, 1))
-    # Cart is in the lower half, so strip off the top and bottom of the screen
-    _, screen_height, screen_width = screen.shape
-    screen = screen[:, int(screen_height*0.4):int(screen_height * 0.8)]
-    view_width = int(screen_width * 0.6)
-    cart_location = get_cart_location(screen_width)
-    if cart_location < view_width // 2:
-        slice_range = slice(view_width)
-    elif cart_location > (screen_width - view_width // 2):
-        slice_range = slice(-view_width, None)
-    else:
-        slice_range = slice(cart_location - view_width // 2,
-                            cart_location + view_width // 2)
-    # Strip off the edges, so that we have a square image centered on a cart
-    screen = screen[:, :, slice_range]
-    # Convert to float, rescale, convert to torch tensor
-    # (this doesn't require a copy)
-    screen = np.ascontiguousarray(screen, dtype=np.float32) / 255
-    screen = torch.from_numpy(screen)
-    # Resize, and add a batch dimension (BCHW)
-    return resize(screen).unsqueeze(0)
 
 
 env.reset()
@@ -129,11 +94,6 @@ env.reset()
 #plt.title('Example extracted screen')
 #plt.show()
 
-# Get screen size so that we can initialize layers correctly based on shape
-# returned from AI gym. Typical dimensions at this point are close to 3x40x90
-# which is the result of a clamped and down-scaled render buffer in get_screen()
-init_screen = get_screen()
-_, _, screen_height, screen_width = init_screen.shape
 
 # Get number of actions from gym action space
 n_actions = env.action_space.n
@@ -142,15 +102,14 @@ n_actions = env.action_space.n
 
 
 
-
-BATCH_SIZE = 16 # default 128
+BATCH_SIZE = 64 # default 128
 GAMMA = 0.999
-EPS_START = 1.  # default .9
-EPS_END = 1.0   # default .05
-EPS_DECAY = 3000  # default 200
-TARGET_UPDATE = 50 # default 10
+EPS_START = 0.95  # default .9
+EPS_END = 0.05   # default .05
+EPS_DECAY = 200  # default 200
+TARGET_UPDATE = 10 # default 10
 num_episodes = 100
-
+MEM_CAP = 100_000
 
 if Load:
     if not os.path.exists(dir):
@@ -159,16 +118,16 @@ if Load:
     try:
         policy_net_dict = torch.load(os.path.join(dir, "net.pt"))
         
-        policy_net = DQN(screen_height, screen_width, n_actions)
-        target_net = DQN(screen_height, screen_width, n_actions)
+        policy_net = DQN(n_actions)
+        target_net = DQN(n_actions)
         
         policy_net.load_state_dict(policy_net_dict)
         target_net.load_state_dict(policy_net_dict)
         target_net.eval()
     except FileNotFoundError:
         print("using default net")
-        policy_net = DQN(screen_height, screen_width, n_actions).to(device)
-        target_net = DQN(screen_height, screen_width, n_actions).to(device)
+        policy_net = DQN(n_actions).to(device)
+        target_net = DQN(n_actions).to(device)
         
         target_net.load_state_dict(policy_net.state_dict())
         target_net.eval()
@@ -177,10 +136,11 @@ if Load:
         memory = torch.load(os.path.join(dir, "memory.pt"))
     except FileNotFoundError:
         print("using default memory")
-        memory = ReplayMemory(50_000_000)
+        memory = ReplayMemory(MEM_CAP)
         
     try:
         steps_done = torch.load(os.path.join(dir, "steps.pt"))
+        old_steps = steps_done
     except FileNotFoundError:
         print("no steps")
         steps_done = 0
@@ -193,14 +153,14 @@ if Load:
 
 else:
     print("using default net")
-    policy_net = DQN(screen_height, screen_width, n_actions).to(device)
-    target_net = DQN(screen_height, screen_width, n_actions).to(device)
+    policy_net = DQN(n_actions).to(device)
+    target_net = DQN(n_actions).to(device)
     
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
     
     print("using default memory")
-    memory = ReplayMemory(50_000_000)
+    memory = ReplayMemory(MEM_CAP)
     
     print("no steps")
     steps_done = 0
@@ -208,30 +168,10 @@ else:
     print("no durations")
     episode_durations = []
 
-'''
-
-policy_net_dict, memory, steps_done, episode_durations = torch_load("cartpole_data.pth")
-
-policy_net = DQN(screen_height, screen_width, n_actions)
-target_net = DQN(screen_height, screen_width, n_actions)
-
-policy_net.load_state_dict(policy_net_dict)
-target_net.load_state_dict(policy_net_dict)
-target_net.eval()
-
-'''
-
-
-
-
-
-
-
 
 
 
 optimizer = optim.RMSprop(policy_net.parameters())
-
 
 def select_action(state):
     global steps_done
@@ -244,7 +184,9 @@ def select_action(state):
             # t.max(1) will return largest column value of each row.
             # second column on max result is index of where max element was
             # found, so we pick action with the larger expected reward.
-            return policy_net(state).max(1)[1].view(1, 1)
+            action = policy_net(state)
+            print(f"{action.shape=}")
+            return action.max(0)[1].view(1, 1)
     else:
         return torch.tensor([[random.randrange(n_actions)]], device=device, dtype=torch.long)
 
@@ -264,9 +206,6 @@ def plot_durations():
         plt.plot(means.numpy())
 
     plt.pause(0.001)  # pause a bit so that plots are updated
-    if is_ipython:
-        display.clear_output(wait=True)
-        display.display(plt.gcf())
 
 
 def optimize_model():
@@ -318,22 +257,15 @@ def optimize_model():
 try:
     for i_episode in range(num_episodes):
         # Initialize the environment and state
-        env.reset()
-        last_screen = get_screen()
-        current_screen = get_screen()
-        state = current_screen - last_screen
+        state = torch.tensor(env.reset(), dtype=torch.float)
         for t in count():
             # Select and perform an action
             action = select_action(state)
-            _, reward, done, _ = env.step(action.item())
+            next_state, reward, done, _ = env.step(action.item())
+            next_state = torch.tensor(next_state, dtype=torch.float)
             reward = torch.tensor([reward], device=device)
-
-            # Observe new state
-            last_screen = current_screen
-            current_screen = get_screen()
-            if not done:
-                next_state = current_screen - last_screen
-            else:
+            
+            if done:
                 next_state = None
 
             # Store the transition in memory
@@ -347,14 +279,14 @@ try:
             if done:
                 episode_durations.append(t + 1)
                 plot_durations()
+                #print("Episode =", i_episode, end="\r")
                 break
         # Update the target network, copying all weights and biases in DQN
-        if i_episode % TARGET_UPDATE == 0:
+        if i_episode % TARGET_UPDATE == 0 and i_episode:
             target_net.load_state_dict(policy_net.state_dict())
-            print(i_episode, end="\r")
-            #plot_durations()  # mine
-except (Exception, KeyboardInterrupt) as e:
-    print(f"\nCaught {type(e)}.")
+            
+except:
+    raise
 finally:
     if Load:
         print("\nSaving")
@@ -362,16 +294,11 @@ finally:
         torch.save(memory, os.path.join(dir, "memory.pt"))
         torch.save(steps_done, os.path.join(dir, "steps.pt"))
         torch.save(episode_durations, os.path.join(dir, "durations.pt"))
-        
-        
-        #torch.save((policy_net.state_dict(), memory, steps_done, episode_durations), filename)
+
 
 print('Complete')
 env.render()
 env.close()
-#plt.ioff()
-#plt.show()
-
 
 
 
