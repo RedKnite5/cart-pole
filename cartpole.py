@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 
 
 Load = True
-dir = "save_1"
+dir = "save"
 
 env = gym.make('CartPole-v0').unwrapped
 
@@ -143,13 +143,14 @@ n_actions = env.action_space.n
 
 
 
-BATCH_SIZE = 16 # default 128
+BATCH_SIZE = 128 # default 128
 GAMMA = 0.999
-EPS_START = 1.  # default .9
-EPS_END = 1.0   # default .05
-EPS_DECAY = 3000  # default 200
-TARGET_UPDATE = 50 # default 10
+EPS_START = 0.9  # default .9
+EPS_END = 0.05   # default .05
+EPS_DECAY = 200  # default 200
+TARGET_UPDATE = 10 # default 10
 num_episodes = 100
+MEM_CAP = 10_000_000
 
 
 if Load:
@@ -177,7 +178,7 @@ if Load:
         memory = torch.load(os.path.join(dir, "memory.pt"))
     except FileNotFoundError:
         print("using default memory")
-        memory = ReplayMemory(50_000_000)
+        memory = ReplayMemory(MEM_CAP)
         
     try:
         steps_done = torch.load(os.path.join(dir, "steps.pt"))
@@ -200,29 +201,13 @@ else:
     target_net.eval()
     
     print("using default memory")
-    memory = ReplayMemory(50_000_000)
+    memory = ReplayMemory(MEM_CAP)
     
     print("no steps")
     steps_done = 0
     
     print("no durations")
     episode_durations = []
-
-'''
-
-policy_net_dict, memory, steps_done, episode_durations = torch_load("cartpole_data.pth")
-
-policy_net = DQN(screen_height, screen_width, n_actions)
-target_net = DQN(screen_height, screen_width, n_actions)
-
-policy_net.load_state_dict(policy_net_dict)
-target_net.load_state_dict(policy_net_dict)
-target_net.eval()
-
-'''
-
-
-
 
 
 
@@ -264,9 +249,6 @@ def plot_durations():
         plt.plot(means.numpy())
 
     plt.pause(0.001)  # pause a bit so that plots are updated
-    if is_ipython:
-        display.clear_output(wait=True)
-        display.display(plt.gcf())
 
 
 def optimize_model():
@@ -352,7 +334,7 @@ try:
         if i_episode % TARGET_UPDATE == 0:
             target_net.load_state_dict(policy_net.state_dict())
             print(i_episode, end="\r")
-            #plot_durations()  # mine
+            #plot_durations()
 except (Exception, KeyboardInterrupt) as e:
     print(f"\nCaught {type(e)}.")
 finally:
@@ -362,15 +344,12 @@ finally:
         torch.save(memory, os.path.join(dir, "memory.pt"))
         torch.save(steps_done, os.path.join(dir, "steps.pt"))
         torch.save(episode_durations, os.path.join(dir, "durations.pt"))
-        
-        
-        #torch.save((policy_net.state_dict(), memory, steps_done, episode_durations), filename)
+
 
 print('Complete')
 env.render()
 env.close()
-#plt.ioff()
-#plt.show()
+
 
 
 
