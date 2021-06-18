@@ -29,9 +29,6 @@ dir = "save"
 env = gym.make('CartPole-v0').unwrapped
 
 
-print(env.observation_space)
-
-
 plt.ion()
 
 # if gpu is to be used
@@ -76,8 +73,6 @@ class DQN(nn.Module):
     def forward(self, x):
         x = x.to(device)
         
-        print(f"{x.shape=}")
-        
         x = F.relu(self.start(x))
         x = F.relu(self.head(x))
         
@@ -101,14 +96,19 @@ n_actions = env.action_space.n
 
 
 
-BATCH_SIZE = 64 # default 128
+BATCH_SIZE = 512 # default 128
 GAMMA = 0.999
 EPS_START = 0.95  # default .9
 EPS_END = 0.05   # default .05
-EPS_DECAY = 200  # default 200
-TARGET_UPDATE = 10 # default 10
-num_episodes = 100
+EPS_DECAY = 10_000  # default 200
+TARGET_UPDATE = 50 # default 10
+num_episodes = 5000
 MEM_CAP = 100_000
+LEGACY_MEM_CAP = 10_000
+LEGACY_MEM_RATIO = .2
+GRAD_MULT = .8
+SOLVED_GRAD_MULT = .1
+
 
 if Load:
     if not os.path.exists(dir):
@@ -132,10 +132,11 @@ if Load:
         target_net.eval()
     
     try:
-        memory = torch.load(os.path.join(dir, "memory.pt"))
+        memory, legacy = torch.load(os.path.join(dir, "memory.pt"))
     except FileNotFoundError:
         print("using default memory")
         memory = ReplayMemory(MEM_CAP)
+        legacy = ReplayMemory(LEGACY_MEM_CAP)
         
     try:
         steps_done = torch.load(os.path.join(dir, "steps.pt"))
@@ -160,6 +161,7 @@ else:
     
     print("using default memory")
     memory = ReplayMemory(MEM_CAP)
+    legacy = ReplayMemory(LEGACY_MEM_CAP)
     
     print("no steps")
     steps_done = 0
@@ -178,13 +180,14 @@ def select_action(state):
     eps_threshold = EPS_END + (EPS_START - EPS_END) * \
         math.exp(-1. * steps_done / EPS_DECAY)
     steps_done += 1
+    if steps_done % 200 == 0:
+        print(f"{eps_threshold=:.6f}", end="\r")
     if sample > eps_threshold:  # I set the hard cutoff
         with torch.no_grad():
             # t.max(1) will return largest column value of each row.
             # second column on max result is index of where max element was
             # found, so we pick action with the larger expected reward.
             action = policy_net(state)
-            #print(f"{action.shape=}")
             return action.max(0)[1].view(1, 1)
     else:
         return torch.tensor([[random.randrange(n_actions)]], device=device, dtype=torch.long)
@@ -208,31 +211,35 @@ def plot_durations():
 
 
 def optimize_model():
-    if len(memory) < BATCH_SIZE:
+    global GRAD_MULT
+    
+    if len(legacy) < BATCH_SIZE:
         return
-    transitions = memory.sample(BATCH_SIZE)
-    print("trans shape ", len(transitions), len(transitions[0]))
+    
+    if len(memory) < int(BATCH_SIZE * (1-LEGACY_MEM_RATIO)):
+        transitions = legacy.sample(BATCH_SIZE)
+    else:
+        mem_transitions = memory.sample(int(BATCH_SIZE * (1-LEGACY_MEM_RATIO)))
+        legacy_transitions = legacy.sample(int(BATCH_SIZE * LEGACY_MEM_RATIO + 1))
+        transitions = mem_transitions + legacy_transitions
+    
     # Transpose the batch (see https://stackoverflow.com/a/19343/3343043 for
     # detailed explanation). This converts batch-array of Transitions
     # to Transition of batch-arrays.
     batch = Transition(*zip(*transitions))
-    
-    print("batch shape ", len(batch), len(batch[0]), batch)
 
     # Compute a mask of non-final states and concatenate the batch elements
     # (a final state would've been the one after which simulation ended)
     non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
                                           batch.next_state)), device=device, dtype=torch.bool)
-    non_final_next_states = torch.cat([s for s in batch.next_state
+    non_final_next_states = torch.stack([s for s in batch.next_state
                                                 if s is not None])
-    #state_batch = torch.cat(batch.state, 0)
-    state_batch = torch.tensor(list(batch.state))
+    #print(non_final_next_states.shape)
+    
+    state_batch = torch.transpose(torch.stack(batch.state), 0, 1)
     action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
     
-    #print("batch.state ", batch.state)
-    #print("state batch ", state_batch)
-    print(torch.transpose(state_batch, 0, 1))
     
     # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
     # columns of actions taken. These are the actions which would've been taken
@@ -256,7 +263,19 @@ def optimize_model():
     # Optimize the model
     optimizer.zero_grad()
     loss.backward()
+    
+    #GRAD_MULT = GRAD_MULT_END + (GRAD_MULT_START - GRAD_MULT_END) * \
+    #    math.exp(-1. * steps_done / GRAD_MULT_DECAY)
+    
+    #if steps_done % 200 == 0:
+    #    print(f"    {GRAD_MULT=:.5f}", end="\r")
+    
+    
+    if episode_durations[-20:].count(502) > 2:
+        GRAD_MULT = SOLVED_GRAD_MULT
+    
     for param in policy_net.parameters():
+        param.grad.data *= GRAD_MULT
         param.grad.data.clamp_(-1, 1)
     optimizer.step()
 
@@ -268,6 +287,7 @@ try:
         for t in count():
             # Select and perform an action
             action = select_action(state)
+            #print(f"{action=}")
             next_state, reward, done, _ = env.step(action.item())
             next_state = torch.tensor(next_state, dtype=torch.float)
             reward = torch.tensor([reward], device=device)
@@ -276,14 +296,17 @@ try:
                 next_state = None
 
             # Store the transition in memory
-            memory.push(state.unsqueeze(1), action, next_state, reward)
+            if steps_done < LEGACY_MEM_CAP + 1000:
+                legacy.push(state, action, next_state, reward)
+            else:
+                memory.push(state, action, next_state, reward)
 
             # Move to the next state
             state = next_state
 
             # Perform one step of the optimization (on the policy network)
             optimize_model()
-            if done:
+            if done or t>500:
                 episode_durations.append(t + 1)
                 plot_durations()
                 #print("Episode =", i_episode, end="\r")
@@ -298,7 +321,7 @@ finally:
     if Load:
         print("\nSaving")
         torch.save(policy_net.state_dict(), os.path.join(dir, "net.pt"))
-        torch.save(memory, os.path.join(dir, "memory.pt"))
+        torch.save((memory, legacy), os.path.join(dir, "memory.pt"))
         torch.save(steps_done, os.path.join(dir, "steps.pt"))
         torch.save(episode_durations, os.path.join(dir, "durations.pt"))
 
