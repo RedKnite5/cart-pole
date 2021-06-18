@@ -225,8 +225,8 @@ def optimize_model():
                                           batch.next_state)), device=device, dtype=torch.bool)
     non_final_next_states = torch.cat([s for s in batch.next_state
                                                 if s is not None])
-    #state_batch = torch.cat(batch.state, 0)
-    state_batch = torch.tensor(list(batch.state))
+    
+    state_batch = torch.stack(batch.state)
     action_batch = torch.cat(batch.action)
     reward_batch = torch.cat(batch.reward)
     
@@ -276,7 +276,7 @@ try:
                 next_state = None
 
             # Store the transition in memory
-            memory.push(state.unsqueeze(1), action, next_state, reward)
+            memory.push(state, action, next_state, reward)
 
             # Move to the next state
             state = next_state
