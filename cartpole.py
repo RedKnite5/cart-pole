@@ -62,7 +62,7 @@ class DQN(nn.Module):
         
         self.n_inputs = env.observation_space.shape[0]
         
-        linear_size = 16
+        linear_size = 32
         
         
         self.start = nn.Linear(self.n_inputs, linear_size)
@@ -270,7 +270,7 @@ try:
 
             # Perform one step of the optimization (on the policy network)
             optimize_model()
-            if done:
+            if done or t >= 501:
                 episode_durations.append(t + 1)
                 plot_durations()
                 #print("Episode =", i_episode, end="\r")
