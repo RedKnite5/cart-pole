@@ -6,7 +6,7 @@ from itertools import count
 
 import numpy as np
 
-from PIL import Image
+#from PIL import Image
 
 import gym
 
@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import torchvision.transforms as T
+#import torchvision.transforms as T
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -62,7 +62,7 @@ class DQN(nn.Module):
         
         self.n_inputs = env.observation_space.shape[0]
         
-        linear_size = 32
+        linear_size = 12
         
         
         self.start = nn.Linear(self.n_inputs, linear_size)
@@ -291,7 +291,7 @@ finally:
 
 
 print('Complete')
-env.render()
+#env.render()
 env.close()
 
 
